@@ -12,7 +12,7 @@ import pandas as pd
 
 import llm
 from config import MAX_SQL_ATTEMPTS
-from db import UnsafeSQLError, run_query
+from db import UnsafeSQLError, run_query, validate_sql
 
 EXAMPLE_QUESTIONS = [
     "How many customers signed up last month?",
@@ -77,6 +77,7 @@ class Turn:
     error: str = ""
     attempts: int = 0
     offline: bool = False
+    validation: str = ""  # "passed" or "blocked: <reason>"
     events: list[str] = field(default_factory=list)
 
 
@@ -92,7 +93,8 @@ def ask(question: str, history: list[dict], offline: bool = False,
     except llm.LLMError as e:
         turn.error = str(e)
     except UnsafeSQLError as e:
-        turn.error = f"Blocked unsafe SQL: {e}"
+        turn.validation = f"blocked: {e}"
+        turn.error = "The query was blocked by the validator and never reached the database."
     except Exception as e:  # last-resort safety net for a live demo
         turn.error = f"Something went wrong: {e}"
     return turn
@@ -110,7 +112,11 @@ def _ask_llm(turn: Turn, history: list[dict], on_step) -> None:
             turn.answer = turn.reasoning or "I can't answer that from this database."
             return
 
-        on_step("Validating and running the query (read-only)…")
+        on_step("Validating the SQL…")
+        validate_sql(turn.sql)  # raises UnsafeSQLError; never retried
+        turn.validation = "passed"
+
+        on_step("Running the query on a read-only connection…")
         try:
             qr = run_query(turn.sql)
         except UnsafeSQLError:
@@ -135,7 +141,10 @@ def _ask_offline(turn: Turn, on_step) -> None:
                       "Set ANTHROPIC_API_KEY to ask anything.")
         return
     turn.sql, turn.attempts = sql, 1
-    on_step("Running the query (read-only)…")
+    on_step("Validating the SQL…")
+    validate_sql(sql)
+    turn.validation = "passed"
+    on_step("Running the query on a read-only connection…")
     qr = run_query(sql)
     turn.df, turn.truncated = qr.df, qr.truncated
     turn.answer = _offline_summary(qr.df)

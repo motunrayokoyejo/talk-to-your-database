@@ -4,7 +4,7 @@ import streamlit as st
 
 from assistant import EXAMPLE_QUESTIONS, ask
 from config import DB_PATH, DEMO_TODAY, MAX_ROWS, MODEL, has_api_key
-from db import SCHEMA_NOTES, get_schema_ddl, get_table_counts
+from db import SCHEMA_NOTES, UnsafeSQLError, get_schema_ddl, get_table_counts, validate_sql
 
 st.set_page_config(page_title="Talk to Your Database", page_icon="🗄️", layout="wide")
 
@@ -48,6 +48,19 @@ with st.sidebar:
         st.markdown(md(SCHEMA_NOTES))
     st.caption(f"🔒 Read-only · SELECT only · max {MAX_ROWS} rows")
 
+    st.divider()
+    st.subheader("🛡️ Test the validator")
+    st.caption("Paste SQL as if the model had been tricked into writing it. "
+               "It goes straight to the validator, with no LLM involved.")
+    raw_sql = st.text_area("SQL", "DELETE FROM orders WHERE status = 'cancelled';",
+                           height=90, label_visibility="collapsed")
+    if st.button("Validate", width="stretch"):
+        try:
+            validate_sql(raw_sql)
+            st.success("Passed: this is a read-only query.", icon="✅")
+        except UnsafeSQLError as e:
+            st.error(f"Blocked: {e}", icon="🛑")
+
 
 # --- header ------------------------------------------------------------------
 st.title("🗄️ Talk to Your Database")
@@ -68,23 +81,32 @@ for col, q in zip(cols, EXAMPLE_QUESTIONS):
 def render_turn(turn: dict) -> None:
     with st.chat_message("user"):
         st.markdown(md(turn["question"]))
+    # Stages follow the pipeline: SQL -> validation -> results -> answer.
     with st.chat_message("assistant"):
-        if turn["error"]:
-            st.error(turn["error"])
-        if turn["answer"]:
-            st.markdown(md(turn["answer"]))
         if turn["sql"]:
-            label = "Generated SQL" + (f" (fixed on attempt {turn['attempts']})" if turn["attempts"] > 1 else "")
-            with st.expander(label):
-                st.code(turn["sql"], language="sql")
-                if turn["reasoning"]:
-                    st.caption(md(turn["reasoning"]))
+            label = "① Generated SQL" + (f" (fixed on attempt {turn['attempts']})" if turn["attempts"] > 1 else "")
+            st.markdown(f"**{label}**")
+            st.code(turn["sql"], language="sql")
+            if turn["reasoning"]:
+                st.caption(md(turn["reasoning"]))
+        validation = turn.get("validation", "")
+        if validation == "passed":
+            st.success("② Validation passed: a single read-only SELECT on allowed tables", icon="✅")
+        elif validation.startswith("blocked"):
+            st.error(f"② Blocked by the validator: {validation.removeprefix('blocked: ')}", icon="🛑")
         if turn["df"] is not None:
+            st.markdown("**③ Database results**")
             st.dataframe(turn["df"], width="stretch", hide_index=True)
             note = f"{len(turn['df'])} row(s)"
             if turn["truncated"]:
                 note += f": capped at {MAX_ROWS}; refine your question to see fewer rows"
             st.caption(note)
+        if turn["error"]:
+            st.error(turn["error"])
+        if turn["answer"]:
+            if turn["df"] is not None:
+                st.markdown("**④ Answer**")
+            st.markdown(md(turn["answer"]))
 
 
 for past in st.session_state.history:
