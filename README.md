@@ -36,7 +36,7 @@ Run the safety checks with `python test_safety.py`.
 | `app.py` | The Streamlit UI |
 | `config.py` | Model, effort, row limits, timeout, demo date |
 
-## Safety layers (good talking points)
+## Safety layers
 
 1. **Prompt:** the model is told to write only read-only SQLite.
 2. **Validation (`validate_sql`):** allows a single statement starting with `SELECT` or `WITH`. Rejects write and admin keywords (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `PRAGMA`, `ATTACH`, …) and multiple statements. String literals and comments are masked first, so `'drop'` inside a string doesn't cause a false alarm.
